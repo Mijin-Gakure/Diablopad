@@ -5,7 +5,7 @@
 ## Downloads
 
 Choose your preferred download option:
-- **Latest Release on GitHub:** [DiabloPad v1.0.0](https://github.com/Mijin-Gakure/Diablopad/releases/tag/v1.0.0)
+- **Latest Release on GitHub:** [DiabloPad v1.1](https://github.com/Mijin-Gakure/Diablopad/releases/tag/v1.1)
 - **Direct Download:** [DiabloPad.exe](https://pand.life/Diablopad.exe)
 
 ## Features
@@ -14,6 +14,10 @@ Choose your preferred download option:
 - **Macro Support** – Create multi-step macros, like a one-button town portal (example: press F8, delay, right-click).
 - **Calibration Options** – Calibrate analog sticks to correct for drift and set a center position for smooth movement.
 - **Adjustable Mouse Speed & Movement Radius** – Customize the analog stick sensitivity and movement range.
+- **Left Analog Stick Key Binding** – Bind a key to the left analog stick to use with the "Move Only" ability in-game. This allows for enhanced movement control.
+- **Left Stick Override** – Selectable from the dropdown list in button mappings, this feature lets you bind a key to toggle the left analog stick from move-only mode to left-click with a button press, facilitating easy item pickup.
+- **Left Stick Override Toggle** – If a toggle mechanism is preferred, this option allows you to enable or disable the left stick override with a toggle keybind.
+- **Future Feature: Multi-Press Mappings** – Considering the addition of multi-press mappings for more complex actions, though its necessity is currently under evaluation due to the limited mapping requirements of Diablo II.
 
 ## Setup Instructions
 
@@ -21,11 +25,21 @@ Choose your preferred download option:
 2. **Run DiabloPad.exe as Administrator** to allow full control and permissions.
 3. **Connect & Power On Your Controller** before launching DiabloPad so it’s detected correctly.
 4. **Open DiabloPad** and follow these setup steps:
-
+   
    - **Select Game Window:** In the **Window Selection** tab, choose the game window you want to control. (This ensures center position calibration is relative to your game window.)
    - **Calibrate Sticks:** Go to the **Calibration** tab, click **Calibrate Sticks**, and keep analog sticks in neutral to fix drift issues (if needed, repeat for optimal results).
    - **Set Center Position:** In the **Calibration** tab, click **Set Center Position** and set it by clicking dead center on your in-game character. (This enables the left analog stick for movement.)
    - **Configure Controller Mappings:** In **Controller Mappings**, assign custom actions or macros to controller buttons.
+   - **Bind Left Analog Stick Key:**
+     1. Bind a key to the left analog stick within DiabloPad.
+     2. In *Project D2*, bind the corresponding key to the "Move Only" ability.
+     3. Turn on the **Quick Cast** feature in-game.
+     4. Map the bound key in DiabloPad to the left analog stick.
+   - **Set Up Left Stick Override:**
+     1. In **Controller Mappings**, select **Left Stick Override** from the dropdown list.
+     2. Bind your desired key to toggle the left stick between move-only mode and left-click functionality.
+     3. Alternatively, enable the **Left Stick Override Toggle** if you prefer using a toggle mechanism.
+     4. Use this feature to easily pick up items off the ground by switching the left stick to perform left-click actions.
    - **Create Macros:** In **Macros**, create custom multi-step actions. For example, set F8 to town portal in-game, then add a macro with:
      - 0 ms: Press F8
      - 50 ms: Right Click
