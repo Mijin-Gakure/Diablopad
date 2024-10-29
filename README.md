@@ -5,7 +5,7 @@
 ## Downloads
 
 Choose your preferred download option:
-- **Latest Release on GitHub:** [DiabloPad v1.1](https://github.com/Mijin-Gakure/Diablopad/releases/tag/v1.1)
+- **Latest Release on GitHub:** [DiabloPad v1.2](https://github.com/Mijin-Gakure/Diablopad/releases/tag/v1.2)
 - **Direct Download:** [DiabloPad.exe](https://pand.life/Diablopad.exe)
 
 ## Features
