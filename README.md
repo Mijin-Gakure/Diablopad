@@ -11,7 +11,7 @@ Choose your preferred download option:
 ## Features
 
 - **Custom Button Mappings** – Assign any in-game action or keypress to a controller button.
-- **Macro Support** – Create multi-step macros, like a one-button town portal (example: press F8, delay, right-click).
+- **Macro Support** – Create multi-step macros.
 - **Calibration Options** – Calibrate analog sticks to correct for drift and set a center position for smooth movement.
 - **Adjustable Mouse Speed & Movement Radius** – Customize the analog stick sensitivity and movement range.
 - **Left Analog Stick Key Binding** – Bind a key to the left analog stick to use with the "Move Only" ability in-game. This allows for enhanced movement control.
