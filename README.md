@@ -40,9 +40,9 @@ Choose your preferred download option:
      2. Bind your desired key to toggle the left stick between move-only mode and left-click functionality.
      3. Alternatively, enable the **Left Stick Override Toggle** if you prefer using a toggle mechanism.
      4. Use this feature to easily pick up items off the ground by switching the left stick to perform left-click actions.
-   - **Create Macros:** In **Macros**, create custom multi-step actions. For example, set F8 to town portal in-game, then add a macro with:
+   - **Create Macros:** In **Macros**, create custom multi-step actions. For example, two abilityies with one keypress:
      - 1 ms: Press F8
-     - 50 ms: Right Click
+     - 50 ms: Right F9
      - Assign this to a button to use it with a single press.
    - **Adjust Settings:** In **Settings**, tweak mouse speed for the right analog stick, and use **Movement Radius** to set the left stick’s range relative to your screen resolution.
 
