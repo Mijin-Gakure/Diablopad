@@ -36,18 +36,23 @@ print(f"Detected joystick: {joystick.get_name()}")
 CONFIG_FILE = 'controller_config.json'
 MACROS_FILE = 'macros.json'
 
-# Right stick configuration
+# Stick axis mappings
+LEFT_STICK_X_AXIS = 0
+LEFT_STICK_Y_AXIS = 1
 RIGHT_STICK_X_AXIS = 2
 RIGHT_STICK_Y_AXIS = 3
-DEADZONE = 0.1
+DEADZONE = 0.2  # Increased from 0.1 to 0.2
 
 # Click interval in seconds
 CLICK_INTERVAL = 0.1  # 100 milliseconds
 
+# DPad press delay (750 milliseconds)
+DPAD_PRESS_DELAY = 0.75  # in seconds
+
 # Mapping for buttons (These may vary depending on the controller and pygame's mapping)
 BUTTON_MAPPING = {
     0: 'A',
-    1: 'B', 
+    1: 'B',
     2: 'X',
     3: 'Y',
     4: 'LB',
@@ -71,6 +76,14 @@ HAT_MAPPING = {
     (-1, 0): 'DPad_Left',
     (1, 0): 'DPad_Right',
     (0, 0): 'DPad_Center'
+}
+
+# DPad keybind mapping
+DPAD_KEYBIND_MAPPING = {
+    'DPad_Up': 'f9',
+    'DPad_Down': 'f10',
+    'DPad_Left': 'f11',
+    'DPad_Right': 'f12'
 }
 
 # Define possible actions
@@ -98,9 +111,12 @@ override_actions = [
 ]
 POSSIBLE_ACTIONS.extend(override_actions)
 
+# Add macro actions (will be updated dynamically)
+# Macros are prefixed with 'macro:'
+
 # Default action mappings with 'disable_toggle' flag
 DEFAULT_ACTIONS = {
-    'A': {'action': 'nothing', 'disable_toggle': False},
+    'A': {'action': 'left_stick_override', 'disable_toggle': False},
     'B': {'action': 'mouse_wheel_up', 'disable_toggle': False},
     'X': {'action': 'press_k', 'disable_toggle': False},
     'Y': {'action': 'press_i', 'disable_toggle': False},
@@ -116,7 +132,7 @@ DEFAULT_ACTIONS = {
     'DPad_Down': {'action': 'press_tab', 'disable_toggle': False},
     'DPad_Left': {'action': 'press_q', 'disable_toggle': False},
     'DPad_Right': {'action': 'press_c', 'disable_toggle': False},
-    'LeftStick': {'action': 'left_click'}  # Default LeftStick action without 'disable_toggle'
+    'LeftStick': {'action': 'press_f7'}  # Set to 'press_f7' for your use case
 }
 
 def normalize(value, deadzone):
@@ -221,7 +237,8 @@ class MacrosManager:
 
 class ControllerHandler:
     def __init__(self, gui, event_queue, macros_manager):
-        self.actions = DEFAULT_ACTIONS.copy()
+        # Deep copy of DEFAULT_ACTIONS to avoid modifying the original
+        self.actions = json.loads(json.dumps(DEFAULT_ACTIONS))
         self.running = True
         self.gui = gui
         self.event_queue = event_queue
@@ -245,6 +262,9 @@ class ControllerHandler:
         # Left stick state
         self.left_stick_active = False
 
+        # Current LeftStick action
+        self.leftstick_current_action = None
+
         # Thread control for LeftStick actions
         self.leftstick_thread = None
         self.leftstick_thread_running = False
@@ -264,6 +284,14 @@ class ControllerHandler:
         self.left_stick_override_active = False
         self.left_stick_override_toggle = False
 
+        # DPad press tracking for delay
+        self.dpad_last_pressed = {}
+
+        # DPad state tracking
+        self.current_active_dpad = set()
+        self.last_dpad_press_times = {dpad: 0 for dpad in DPAD_KEYBIND_MAPPING.keys()}
+        self.dpad_press_interval = 0.75  # 750 milliseconds
+
         # Load saved configuration
         try:
             self.load_config()
@@ -273,6 +301,10 @@ class ControllerHandler:
 
         # Initialize default background color for GUI highlighting
         self.default_bg = 'SystemButtonFace'
+
+        # Initialize counters for stick release grace period
+        self.left_stick_release_counter = 0
+        self.RELEASE_THRESHOLD = 5  # Number of consecutive frames to confirm release
 
         # Start threads
         self.event_thread = threading.Thread(target=self.controller_event_loop, daemon=True)
@@ -366,14 +398,14 @@ class ControllerHandler:
         self.save_config()
 
     def get_movement_position(self, x_val, y_val):
-        if abs(x_val) < DEADZONE and abs(y_val) < DEADZONE:
+        if x_val == 0 and y_val == 0:
             return None
-            
+
         angle = math.degrees(math.atan2(y_val, x_val))
         if angle < 0:
             angle += 360
 
-        closest_angle = min(self.movement_points.keys(), 
+        closest_angle = min(self.movement_points.keys(),
                           key=lambda k: abs((k - angle + 180) % 360 - 180))
         return self.movement_points[closest_angle]
 
@@ -382,12 +414,28 @@ class ControllerHandler:
             if self.selected_window_title:
                 active_window = gw.getActiveWindow()
                 if active_window and self.selected_window_title.lower() in active_window.title.lower():
+                    if not self.is_active:
+                        print("Game window is active.")
                     self.is_active = True
                 else:
+                    if self.is_active:
+                        print("Game window is inactive.")
                     self.is_active = False
             else:
                 self.is_active = False
             time.sleep(0.5)
+
+    def calibrate_sticks(self):
+        """
+        Calibrates the neutral positions of the left and right sticks for drift correction.
+        """
+        pygame.event.pump()
+        self.left_stick_neutral_x = joystick.get_axis(LEFT_STICK_X_AXIS)
+        self.left_stick_neutral_y = joystick.get_axis(LEFT_STICK_Y_AXIS)
+        self.right_stick_neutral_x = joystick.get_axis(RIGHT_STICK_X_AXIS)
+        self.right_stick_neutral_y = joystick.get_axis(RIGHT_STICK_Y_AXIS)
+        self.save_config()
+        print("Stick calibration completed.")
 
     def controller_event_loop(self):
         while self.running:
@@ -401,7 +449,7 @@ class ControllerHandler:
                 # Apply Drift Correction by subtracting neutral positions
                 axis_x = normalize(right_x_raw - self.right_stick_neutral_x, DEADZONE)
                 axis_y = normalize(right_y_raw - self.right_stick_neutral_y, DEADZONE)
-                
+
                 if abs(axis_x) > 0 or abs(axis_y) > 0:
                     move_x = axis_x * self.mouse_speed
                     move_y = axis_y * self.mouse_speed
@@ -413,46 +461,25 @@ class ControllerHandler:
                         print(f"Error moving mouse: {e}")
 
                 # Handle left stick with Drift Correction
-                left_x_raw = joystick.get_axis(0)
-                left_y_raw = joystick.get_axis(1)
+                left_x_raw = joystick.get_axis(LEFT_STICK_X_AXIS)
+                left_y_raw = joystick.get_axis(LEFT_STICK_Y_AXIS)
 
                 adjusted_left_x = left_x_raw - self.left_stick_neutral_x
                 adjusted_left_y = left_y_raw - self.left_stick_neutral_y
 
                 x_val = normalize(adjusted_left_x, DEADZONE)
                 y_val = normalize(adjusted_left_y, DEADZONE)
-                
-                if abs(x_val) >= DEADZONE or abs(y_val) >= DEADZONE:
+
+                # Updated condition to check for non-zero values
+                if x_val != 0 or y_val != 0:
+                    print(f"Left Stick moved: x_val={x_val}, y_val={y_val}")
                     if not self.left_stick_active:
                         self.left_stick_active = True
+                        self.left_stick_release_counter = 0  # Reset release counter
                         print("Left stick activated.")
-                        # Determine LeftStick action based on override flags
-                        if self.left_stick_override_active or self.left_stick_override_toggle:
-                            leftstick_action = 'left_click'
-                        else:
-                            leftstick_action = self.actions.get('LeftStick', {}).get('action', 'left_click')
-                        # Handle LeftStick action
-                        if leftstick_action == 'left_click':
-                            self.start_clicking()
-                        elif leftstick_action == 'right_click':
-                            self.start_right_clicking()
-                        elif leftstick_action.startswith('press_'):
-                            key = leftstick_action.split('_', 1)[1]
-                            try:
-                                pyautogui.keyDown(key)
-                                self.pressed_keys.add(key)
-                                print(f"Key '{key}' pressed down by LeftStick.")
-                            except Exception as e:
-                                print(f"Error pressing key '{key}' for LeftStick: {e}")
-                        elif leftstick_action.startswith('macro:'):
-                            macro_name = leftstick_action.split(':', 1)[1]
-                            print(f"Executing macro '{macro_name}' from LeftStick.")
-                            self.macros_manager.execute_macro(macro_name)
-                        elif leftstick_action == 'nothing':
-                            pass
-                        else:
-                            print(f"Unknown LeftStick action: {leftstick_action}")
-                    
+                        # Update LeftStick action
+                        self.update_leftstick_action()
+
                     target_pos = self.get_movement_position(x_val, y_val)
                     if target_pos:
                         try:
@@ -462,37 +489,22 @@ class ControllerHandler:
                             print(f"Error moving mouse: {e}")
                 else:
                     if self.left_stick_active:
-                        self.left_stick_active = False
-                        print("Left stick released.")
-                        # Determine LeftStick action based on override flags
-                        if self.left_stick_override_active or self.left_stick_override_toggle:
-                            leftstick_action = 'left_click'
-                        else:
-                            leftstick_action = self.actions.get('LeftStick', {}).get('action', 'left_click')
-                        # Handle LeftStick action release
-                        if leftstick_action == 'left_click':
-                            self.stop_clicking()
-                        elif leftstick_action == 'right_click':
-                            self.stop_right_clicking()
-                        elif leftstick_action.startswith('press_'):
-                            key = leftstick_action.split('_', 1)[1]
+                        self.left_stick_release_counter += 1
+                        print(f"Left stick within deadzone for {self.left_stick_release_counter} frames.")
+                        if self.left_stick_release_counter >= self.RELEASE_THRESHOLD:
+                            self.left_stick_active = False
+                            self.left_stick_release_counter = 0
+                            print("Left stick released.")
+                            # Stop the current LeftStick action
+                            self.stop_leftstick_action()
                             try:
-                                pyautogui.keyUp(key)
-                                self.pressed_keys.discard(key)
-                                print(f"Key '{key}' released by LeftStick.")
+                                pyautogui.moveTo(self.x_center, self.y_center)
+                                print(f"Moved mouse back to center ({self.x_center}, {self.y_center})")
                             except Exception as e:
-                                print(f"Error releasing key '{key}' for LeftStick: {e}")
-                        elif leftstick_action.startswith('macro:'):
-                            pass  # Macros are single actions
-                        elif leftstick_action == 'nothing':
-                            pass
-                        else:
-                            print(f"Unknown LeftStick action on release: {leftstick_action}")
-                        try:
-                            pyautogui.moveTo(self.x_center, self.y_center)
-                            print(f"Moved mouse back to center ({self.x_center}, {self.y_center})")
-                        except Exception as e:
-                            print(f"Error moving mouse to center: {e}")
+                                print(f"Error moving mouse to center: {e}")
+                    else:
+                        self.left_stick_release_counter = 0  # Ensure counter is reset
+                        print("Left stick is inactive.")
 
                 # Handle triggers and other buttons
                 for axis, trigger in TRIGGER_MAPPING.items():
@@ -520,7 +532,21 @@ class ControllerHandler:
                                     print(f"Error performing right click for trigger '{trigger}': {e}")
                                 # After clicking to disable toggle, check if LeftStick is active
                                 if self.left_stick_active and not self.leftstick_thread_running:
-                                    self.start_clicking()
+                                    self.update_leftstick_action()
+
+                # Handle DPad keybind presses
+                current_time = time.time()
+                for dpad in self.current_active_dpad.copy():
+                    last_press = self.last_dpad_press_times.get(dpad, 0)
+                    if current_time - last_press >= self.dpad_press_interval:
+                        keybind = DPAD_KEYBIND_MAPPING.get(dpad)
+                        if keybind:
+                            try:
+                                pyautogui.press(keybind)
+                                print(f"Pressed DPad '{dpad}' keybind '{keybind}'.")
+                            except Exception as e:
+                                print(f"Error pressing DPad keybind '{keybind}': {e}")
+                            self.last_dpad_press_times[dpad] = current_time
 
                 # Handle other events
                 for event in pygame.event.get():
@@ -531,38 +557,13 @@ class ControllerHandler:
                     elif event.type == pygame.JOYHATMOTION:
                         self.handle_hat(event.value)
 
-                # After handling all events, check if any buttons are pressed or left stick is active
-                # No need to release all keys here, as we manage key states individually
-
             else:
                 # Ensure that LeftStick actions are stopped if the controller is not active
                 if self.left_stick_active:
                     self.left_stick_active = False
                     print("Controller inactive. Stopping LeftStick actions.")
-                    # Determine LeftStick action based on override flags
-                    if self.left_stick_override_active or self.left_stick_override_toggle:
-                        leftstick_action = 'left_click'
-                    else:
-                        leftstick_action = self.actions.get('LeftStick', {}).get('action', 'left_click')
-                    # Handle LeftStick action release
-                    if leftstick_action == 'left_click':
-                        self.stop_clicking()
-                    elif leftstick_action == 'right_click':
-                        self.stop_right_clicking()
-                    elif leftstick_action.startswith('press_'):
-                        key = leftstick_action.split('_', 1)[1]
-                        try:
-                            pyautogui.keyUp(key)
-                            self.pressed_keys.discard(key)
-                            print(f"Key '{key}' released by LeftStick due to inactivity.")
-                        except Exception as e:
-                            print(f"Error releasing key '{key}' for LeftStick due to inactivity: {e}")
-                    elif leftstick_action.startswith('macro:'):
-                        pass  # Macros are single actions
-                    elif leftstick_action == 'nothing':
-                        pass
-                    else:
-                        print(f"Unknown LeftStick action on inactivity release: {leftstick_action}")
+                    # Stop the current LeftStick action
+                    self.stop_leftstick_action()
                     try:
                         pyautogui.moveTo(self.x_center, self.y_center)
                         print(f"Moved mouse back to center ({self.x_center}, {self.y_center}) due to inactivity.")
@@ -573,6 +574,214 @@ class ControllerHandler:
 
             time.sleep(0.01)
 
+    def handle_hat(self, value):
+        """
+        Handles hat (DPad) motion events.
+        """
+        # Get the current active DPad directions based on the hat value
+        new_active_dpad = set()
+        for direction, name in HAT_MAPPING.items():
+            if value == direction:
+                if name != 'DPad_Center':
+                    new_active_dpad.add(name)
+
+        # Update active DPad directions
+        self.update_active_dpad(new_active_dpad)
+
+    def update_active_dpad(self, new_active_dpad):
+        """
+        Updates the set of active DPad directions and handles keybind actions with delay.
+        """
+        # Determine which DPad directions were pressed
+        pressed = new_active_dpad - self.current_active_dpad
+        # Determine which DPad directions were released
+        released = self.current_active_dpad - new_active_dpad
+
+        for dpad in pressed:
+            self.current_active_dpad.add(dpad)
+            print(f"DPad '{dpad}' pressed.")
+
+        for dpad in released:
+            self.current_active_dpad.discard(dpad)
+            print(f"DPad '{dpad}' released.")
+
+    def perform_action(self, action, pressed=True):
+        print(f"Action Requested: {action}, Pressed: {pressed}")
+        if action == 'nothing':
+            return
+        elif action == 'mouse_wheel_up':
+            if pressed:
+                try:
+                    pyautogui.scroll(100)  # Increased scroll amount
+                    print("Scrolled mouse wheel up.")
+                except Exception as e:
+                    print(f"Error scrolling mouse wheel up: {e}")
+        elif action == 'mouse_wheel_down':
+            if pressed:
+                try:
+                    pyautogui.scroll(-100)  # Increased scroll amount
+                    print("Scrolled mouse wheel down.")
+                except Exception as e:
+                    print(f"Error scrolling mouse wheel down: {e}")
+        elif action in ['left_click', 'right_click', 'middle_click', 'double_click']:
+            try:
+                if pressed:
+                    if action == 'left_click':
+                        pyautogui.click(button='left')
+                        print("Performed left mouse click.")
+                    elif action == 'right_click':
+                        pyautogui.click(button='right')
+                        print("Performed right mouse click.")
+                    elif action == 'middle_click':
+                        pyautogui.click(button='middle')
+                        print("Performed middle mouse click.")
+                    elif action == 'double_click':
+                        pyautogui.doubleClick()
+                        print("Performed double mouse click.")
+            except Exception as e:
+                print(f"Error performing mouse action '{action}': {e}")
+        elif action.startswith('press_'):
+            key = action.split('_', 1)[1]
+            try:
+                if pressed:
+                    pyautogui.keyDown(key)
+                    self.pressed_keys.add(key)
+                    print(f"Key '{key}' pressed down.")
+                else:
+                    pyautogui.keyUp(key)
+                    self.pressed_keys.discard(key)
+                    print(f"Key '{key}' released.")
+            except Exception as e:
+                print(f"Error performing key action '{action}': {e}")
+        elif action == 'left_stick_override':
+            if pressed:
+                self.left_stick_override_active = True
+                print("Left Stick Override activated.")
+                # If LeftStick is active, update its action
+                if self.left_stick_active:
+                    self.update_leftstick_action()
+            else:
+                self.left_stick_override_active = False
+                print("Left Stick Override deactivated.")
+                # If LeftStick is active, revert its action
+                if self.left_stick_active:
+                    self.update_leftstick_action()
+        elif action == 'left_stick_override_toggle':
+            if pressed:
+                self.left_stick_override_toggle = not self.left_stick_override_toggle
+                status = "enabled" if self.left_stick_override_toggle else "disabled"
+                print(f"Left Stick Override Toggle {status}.")
+                # If LeftStick is active, update its action
+                if self.left_stick_active:
+                    self.update_leftstick_action()
+        elif action.startswith('macro:'):
+            macro_name = action.split(':', 1)[1]
+            if pressed:
+                print(f"Executing macro '{macro_name}'.")
+                self.macros_manager.execute_macro(macro_name)
+        else:
+            print(f"Unknown action: {action}")
+
+    def update_leftstick_action(self, force_restart=False):
+        """
+        Updates the LeftStick action based on the override flags.
+        """
+        # Determine the new LeftStick action
+        if self.left_stick_override_active or self.left_stick_override_toggle:
+            new_action = 'left_click'
+        else:
+            new_action = self.actions.get('LeftStick', {}).get('action', 'nothing')
+        print(f"LeftStick Action updated to: {new_action}")
+
+        # If the action hasn't changed and LeftStick is active, do nothing unless force_restart is True
+        if new_action == self.leftstick_current_action and self.left_stick_active and not force_restart:
+            print("LeftStick action unchanged, no update needed.")
+            return
+
+        # Stop the existing action
+        if self.leftstick_current_action == 'left_click':
+            self.stop_clicking()
+        elif self.leftstick_current_action == 'right_click':
+            self.stop_right_clicking()
+        elif self.leftstick_current_action and self.leftstick_current_action.startswith('press_'):
+            key = self.leftstick_current_action.split('_', 1)[1]
+            try:
+                pyautogui.keyUp(key)
+                self.pressed_keys.discard(key)
+                print(f"Key '{key}' released for LeftStick.")
+            except Exception as e:
+                print(f"Error releasing key '{key}' for LeftStick: {e}")
+        elif self.leftstick_current_action and self.leftstick_current_action.startswith('macro:'):
+            pass  # No action needed for macro since it's a single action
+        elif self.leftstick_current_action == 'nothing':
+            pass
+        else:
+            if self.leftstick_current_action:
+                print(f"Unknown LeftStick action to stop: {self.leftstick_current_action}")
+
+        # Start the new action if needed
+        if new_action == 'left_click' and self.left_stick_active:
+            self.start_clicking()
+            print("Started left_click action on LeftStick.")
+        elif new_action == 'right_click' and self.left_stick_active:
+            self.start_right_clicking()
+            print("Started right_click action on LeftStick.")
+        elif new_action.startswith('press_') and self.left_stick_active:
+            key = new_action.split('_', 1)[1]
+            try:
+                pyautogui.keyDown(key)
+                self.pressed_keys.add(key)
+                print(f"Key '{key}' pressed down by LeftStick.")
+            except Exception as e:
+                print(f"Error pressing key '{key}' for LeftStick: {e}")
+        elif new_action.startswith('macro:') and self.left_stick_active:
+            macro_name = new_action.split(':', 1)[1]
+            print(f"Executing macro '{macro_name}' from LeftStick.")
+            self.macros_manager.execute_macro(macro_name)
+        elif new_action == 'nothing':
+            pass
+        else:
+            print(f"Unknown LeftStick action: {new_action}")
+
+        # Update current action
+        self.leftstick_current_action = new_action
+
+    def stop_leftstick_action(self):
+        """
+        Stops the current LeftStick action.
+        """
+        if self.leftstick_current_action == 'left_click':
+            self.stop_clicking()
+        elif self.leftstick_current_action == 'right_click':
+            self.stop_right_clicking()
+        elif self.leftstick_current_action and self.leftstick_current_action.startswith('press_'):
+            key = self.leftstick_current_action.split('_', 1)[1]
+            try:
+                pyautogui.keyUp(key)
+                self.pressed_keys.discard(key)
+                print(f"Key '{key}' released by LeftStick.")
+            except Exception as e:
+                print(f"Error releasing key '{key}' for LeftStick: {e}")
+        elif self.leftstick_current_action and self.leftstick_current_action.startswith('macro:'):
+            pass  # Macros are single actions
+        elif self.leftstick_current_action == 'nothing':
+            pass
+        else:
+            if self.leftstick_current_action:
+                print(f"Unknown LeftStick action to stop: {self.leftstick_current_action}")
+        # Reset current action
+        self.leftstick_current_action = None
+
+    def release_all_keys(self):
+        keys_to_release = list(self.pressed_keys)
+        for key in keys_to_release:
+            try:
+                pyautogui.keyUp(key)
+                print(f"Key '{key}' released.")
+                self.pressed_keys.discard(key)
+            except Exception as e:
+                print(f"Error releasing key '{key}': {e}")
+
     def start_clicking(self):
         with self.leftstick_lock:
             if not self.leftstick_thread_running:
@@ -580,17 +789,15 @@ class ControllerHandler:
                 self.leftstick_thread = threading.Thread(target=self.click_loop, daemon=True)
                 self.leftstick_thread.start()
                 print("Started left clicking thread.")
-        # No need to track current action separately
 
     def stop_clicking(self):
         with self.leftstick_lock:
             if self.leftstick_thread_running:
                 self.leftstick_thread_running = False
                 if self.leftstick_thread is not None:
-                    self.leftstick_thread.join()
+                    self.leftstick_thread.join(timeout=1)  # Added timeout
                     self.leftstick_thread = None
                 print("Stopped left clicking thread.")
-        # No need to track current action separately
 
     def start_right_clicking(self):
         with self.leftstick_lock:
@@ -599,17 +806,15 @@ class ControllerHandler:
                 self.leftstick_thread = threading.Thread(target=self.right_click_loop, daemon=True)
                 self.leftstick_thread.start()
                 print("Started right clicking thread.")
-        # No need to track current action separately
 
     def stop_right_clicking(self):
         with self.leftstick_lock:
             if self.leftstick_thread_running:
                 self.leftstick_thread_running = False
                 if self.leftstick_thread is not None:
-                    self.leftstick_thread.join()
+                    self.leftstick_thread.join(timeout=1)  # Added timeout
                     self.leftstick_thread = None
                 print("Stopped right clicking thread.")
-        # No need to track current action separately
 
     def click_loop(self):
         while self.leftstick_thread_running and self.left_stick_active:
@@ -663,143 +868,11 @@ class ControllerHandler:
                     print(f"Performed right mouse click to disable toggle for button '{button_name}'.")
                 except Exception as e:
                     print(f"Error performing right click for button '{button_name}': {e}")
-            # After releasing an ability, check if LeftStick is still active and re-start clicking
-            if self.left_stick_active and not self.leftstick_thread_running:
-                self.start_clicking()
+            # After releasing an ability, check if LeftStick is active and re-start action
+            if self.left_stick_active:
+                self.update_leftstick_action(force_restart=True)
 
-    def handle_hat(self, value):
-        hat_name = HAT_MAPPING.get(value, 'DPad_Center')
-        action_info = self.actions.get(hat_name, {'action': 'nothing', 'disable_toggle': False})
-        action_name = action_info.get('action', 'nothing')
-        disable_toggle = action_info.get('disable_toggle', False)
-        if hat_name != 'DPad_Center':
-            if hat_name not in self.pressed_buttons:
-                self.pressed_buttons.add(hat_name)
-                self.perform_action(action_name, pressed=True)
-                self.event_queue.put(('press', hat_name))
-        else:
-            if 'DPad_Center' in self.pressed_buttons:
-                self.pressed_buttons.discard('DPad_Center')
-                self.perform_action(action_name, pressed=False)
-                self.event_queue.put(('release', hat_name))
-                # Check for Disable Toggle
-                if disable_toggle:
-                    try:
-                        pyautogui.click(button='right')
-                        print(f"Performed right mouse click to disable toggle for hat '{hat_name}'.")
-                    except Exception as e:
-                        print(f"Error performing right click for hat '{hat_name}': {e}")
-                # After releasing an ability, check if LeftStick is still active and re-start clicking
-                if self.left_stick_active and not self.leftstick_thread_running:
-                    self.start_clicking()
-
-    def perform_action(self, action, pressed=True):
-        if action == 'nothing':
-            return
-        elif action == 'mouse_wheel_up':
-            if pressed:
-                try:
-                    pyautogui.scroll(100)  # Increased scroll amount
-                    print("Scrolled mouse wheel up.")
-                except Exception as e:
-                    print(f"Error scrolling mouse wheel up: {e}")
-        elif action == 'mouse_wheel_down':
-            if pressed:
-                try:
-                    pyautogui.scroll(-100)  # Increased scroll amount
-                    print("Scrolled mouse wheel down.")
-                except Exception as e:
-                    print(f"Error scrolling mouse wheel down: {e}")
-        elif action in ['left_click', 'right_click', 'middle_click', 'double_click']:
-            try:
-                if pressed:
-                    if action == 'left_click':
-                        pyautogui.click(button='left')
-                        print("Performed left mouse click.")
-                    elif action == 'right_click':
-                        pyautogui.click(button='right')
-                        print("Performed right mouse click.")
-                    elif action == 'middle_click':
-                        pyautogui.click(button='middle')
-                        print("Performed middle mouse click.")
-                    elif action == 'double_click':
-                        pyautogui.doubleClick()
-                        print("Performed double mouse click.")
-            except Exception as e:
-                print(f"Error performing mouse action '{action}': {e}")
-        elif action.startswith('press_'):
-            key = action.split('_', 1)[1]
-            try:
-                if pressed:
-                    pyautogui.keyDown(key)
-                    self.pressed_keys.add(key)
-                    print(f"Key '{key}' pressed down.")
-                else:
-                    pyautogui.keyUp(key)
-                    self.pressed_keys.discard(key)
-                    print(f"Key '{key}' released.")
-            except Exception as e:
-                print(f"Error performing key action '{action}': {e}")
-        elif action == 'left_stick_override':
-            if pressed:
-                self.left_stick_override_active = True
-                print("Left Stick Override activated.")
-                # If LeftStick is active, change its action to 'left_click'
-                if self.left_stick_active:
-                    self.update_leftstick_action('left_click')
-            else:
-                self.left_stick_override_active = False
-                print("Left Stick Override deactivated.")
-                # If LeftStick is active, revert its action
-                if self.left_stick_active:
-                    leftstick_action = self.actions.get('LeftStick', {}).get('action', 'left_click')
-                    self.update_leftstick_action(leftstick_action)
-        elif action == 'left_stick_override_toggle':
-            if pressed:
-                self.left_stick_override_toggle = not self.left_stick_override_toggle
-                status = "enabled" if self.left_stick_override_toggle else "disabled"
-                print(f"Left Stick Override Toggle {status}.")
-                # If LeftStick is active, update its action
-                if self.left_stick_active:
-                    desired_action = 'left_click' if self.left_stick_override_toggle else self.actions.get('LeftStick', {}).get('action', 'left_click')
-                    self.update_leftstick_action(desired_action)
-        elif action.startswith('macro:'):
-            macro_name = action.split(':', 1)[1]
-            if pressed:
-                print(f"Executing macro '{macro_name}'.")
-                self.macros_manager.execute_macro(macro_name)
-        else:
-            print(f"Unknown action: {action}")
-
-    def update_leftstick_action(self, desired_action):
-        """
-        Updates the LeftStick action based on the desired_action.
-        Ensures that the previous action is stopped before starting the new one.
-        """
-        # Stop previous action
-        if desired_action != 'left_click' and self.leftstick_thread_running:
-            self.stop_clicking()
-        elif desired_action == 'left_click' and not self.leftstick_thread_running and self.left_stick_active:
-            self.start_clicking()
-
-        # Start new action if needed
-        if desired_action == 'left_click' and self.left_stick_active and not self.leftstick_thread_running:
-            self.start_clicking()
-        elif desired_action == 'right_click' and self.left_stick_active and not self.leftstick_thread_running:
-            self.start_right_clicking()
-        elif desired_action.startswith('press_') and self.left_stick_active:
-            key = desired_action.split('_', 1)[1]
-            try:
-                pyautogui.keyDown(key)
-                self.pressed_keys.add(key)
-                print(f"Key '{key}' pressed down by LeftStick.")
-            except Exception as e:
-                print(f"Error pressing key '{key}' for LeftStick: {e}")
-        elif desired_action.startswith('macro:') and self.left_stick_active:
-            macro_name = desired_action.split(':', 1)[1]
-            print(f"Executing macro '{macro_name}' from LeftStick.")
-            self.macros_manager.execute_macro(macro_name)
-
+    # Ensure release_all_keys is present
     def release_all_keys(self):
         keys_to_release = list(self.pressed_keys)
         for key in keys_to_release:
@@ -809,6 +882,8 @@ class ControllerHandler:
                 self.pressed_keys.discard(key)
             except Exception as e:
                 print(f"Error releasing key '{key}': {e}")
+
+# --- GUI code starts here ---
 
 class ControllerGUI:
     def __init__(self):
@@ -908,7 +983,7 @@ class ControllerGUI:
         row_leftstick.pack(fill='x', pady=2, padx=5)
         label_leftstick = tk.Label(row_leftstick, text='LeftStick', width=20, anchor='w', bg=self.default_bg)
         label_leftstick.pack(side='left')
-        var_leftstick = tk.StringVar(value=self.handler.actions.get('LeftStick', {}).get('action', 'left_click'))
+        var_leftstick = tk.StringVar(value=self.handler.actions.get('LeftStick', {}).get('action', 'nothing'))
         self.vars_leftstick['LeftStick'] = var_leftstick
         combo_leftstick = ttk.Combobox(row_leftstick, textvariable=var_leftstick, values=POSSIBLE_ACTIONS, state='readonly')
         combo_leftstick.pack(side='left', expand=True, fill='x', padx=5)
@@ -1255,15 +1330,15 @@ class ControllerGUI:
 
     def get_window_titles(self):
         windows = gw.getAllTitles()
-        # Filter windows that likely correspond to the game (e.g., 'game.exe' or 'diablo ii')
-        return [title for title in windows if 'game.exe' in title.lower() or 'diablo ii' in title.lower()]
+        # Include all window titles as the user might want to select any
+        return [title for title in windows if title.strip() != ""]
 
     def update_window_list(self):
         self.window_dropdown['values'] = self.get_window_titles()
 
     def select_window(self):
         selected_title = self.window_var.get()
-        if not selected_title:
+        if not selected_title or selected_title == "Select Window":
             messagebox.showerror("Selection Error", "No window selected.")
             return
         self.handler.selected_window_title = selected_title
@@ -1291,7 +1366,7 @@ class ControllerGUI:
         self.update_possible_actions()  # Update actions in Comboboxes
 
     def reset_mappings(self):
-        self.handler.actions = DEFAULT_ACTIONS.copy()
+        self.handler.actions = json.loads(json.dumps(DEFAULT_ACTIONS))  # Deep copy
         for button_name, var in self.vars_buttons.items():
             var.set(self.handler.actions[button_name]['action'])
             self.checkbox_vars[button_name].set(self.handler.actions[button_name].get('disable_toggle', False))
@@ -1312,6 +1387,7 @@ class ControllerGUI:
         messagebox.showinfo("Stick Calibration", 
                           "Keep both analog sticks in their neutral positions and click OK to calibrate.")
 
+        # Call the calibrate_sticks method in ControllerHandler
         self.handler.calibrate_sticks()
         self.stick_calibration_status.config(text="Stick Calibration: Completed")
         self.root.deiconify()
